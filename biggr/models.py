@@ -124,13 +124,16 @@ class DeclarativeMeta(type):
                     continue
                 base_type = v.__args__[0]
                 full_base_type = base_type
-                if base_type is Optional:
+                if getattr(base_type, "_name", None) == "Optional":
                     full_base_type = base_type.__args__[0]
+                if full_base_type.__class__.__name__ == "ForwardRef":
+                    full_base_type = full_base_type.__forward_arg__
                 attrs["__attr_base_classes__"][k] = full_base_type
 
                 attr_val = attrs.get(k)
                 if attr_val is None:
                     attrs[k] = dummy_col_f(obj_type=base_type)
+        print(attrs["__attr_base_classes__"])
 
         return super().__new__(cls, name, bases, attrs)
 
@@ -153,6 +156,8 @@ class DeclarativeBase(metaclass=DeclarativeMeta):
                 idval = object.__getattribute__(self, idname)
                 if idval is not None:
                     attr_cls = self.__attr_base_classes__.get(name)
+                    if isinstance(attr_cls, str):
+                        attr_cls = globals()[attr_cls]
                     if attr_cls is not None:
                         cache_key = (attr_cls, idval)
                         if cache_key in OBJECT_CACHE:
@@ -252,6 +257,93 @@ class InChI(Base):
                 return False
         return True
 
+    def n_protons(self):
+        return 0 if self.p is None else int(self.p)
+
+    def charge(self):
+        n_protons = self.n_protons()
+        base_charge = 0
+        if self.q is not None:
+            if ";" in self.q:
+                for charge in self.q.split(";"):
+                    if not charge:
+                        continue
+                    base_charge += int(charge)
+            else:
+                base_charge = int(self.q)
+        return base_charge + n_protons
+
+
+def _raise_when_no_value_specified():
+    raise ValueError("A specific value should be set.")
+
+
+class TaxonomicRank(Base):
+    __tablename__ = "taxonomic_rank"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+
+    taxons: Mapped[List["Taxon"]] = relationship(back_populates="rank")
+
+
+class Taxon(Base):
+    __tablename__ = "taxon"
+
+    # Using NCBI taxids, so database should not fill in defaults
+    id: Mapped[int] = mapped_column(
+        primary_key=True, default=_raise_when_no_value_specified
+    )
+    parent_id: Mapped[Optional[int]] = mapped_column(ForeignKey("taxon.id"))
+    parent: Mapped[Optional["Taxon"]] = relationship(back_populates="children")
+    children: Mapped[List["Taxon"]] = relationship(
+        back_populates="parent", remote_side=[id]
+    )
+
+    name: Mapped[Optional[str]]
+
+    rank_id: Mapped[int] = mapped_column(ForeignKey(TaxonomicRank.id))
+    rank: Mapped[TaxonomicRank] = relationship(back_populates="taxons")
+
+    genomes: Mapped[List["Genome"]] = relationship(back_populates="taxon")
+    models: Mapped[List["Model"]] = relationship(back_populates="taxon")
+    collections: Mapped[List["ModelCollection"]] = relationship(back_populates="taxon")
+
+
+class ModelCollection(Base, BiGGBase):
+    __tablename__ = "model_collection"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bigg_id: Mapped[str]
+
+    oneliner: Mapped[Optional[str]]
+    description: Mapped[Optional[str]]
+
+    publication_id: Mapped[Optional[int]] = mapped_column(ForeignKey("publication.id"))
+    publication: Mapped[Optional["Publication"]] = relationship(
+        back_populates="collections"
+    )
+
+    taxon_id: Mapped[Optional[int]] = mapped_column(ForeignKey("taxon.id"))
+    taxon: Mapped[Optional[Taxon]] = relationship(back_populates="collections")
+
+    models: Mapped[List["Model"]] = relationship(back_populates="collection")
+
+    collection_namespace_components: Mapped[List["Component"]] = relationship(
+        back_populates="collection"
+    )
+    collection_namespace_universal_components: Mapped[List["UniversalComponent"]] = (
+        relationship(back_populates="collection")
+    )
+    collection_namespace_universal_reactions: Mapped[List["UniversalReaction"]] = (
+        relationship(back_populates="collection")
+    )
+    collection_namespace_reactions: Mapped[List["Reaction"]] = relationship(
+        back_populates="collection"
+    )
+
+    __table_args__ = (UniqueConstraint("bigg_id"),)
+
 
 class Genome(Base):
     __tablename__ = "genome"
@@ -260,7 +352,9 @@ class Genome(Base):
     accession_type: Mapped[str]
     accession_value: Mapped[str]
     organism: Mapped[Optional[str]]
-    taxon_id: Mapped[Optional[str]]
+    taxon_id: Mapped[Optional[int]] = mapped_column(ForeignKey("taxon.id"))
+    taxon: Mapped[Optional[Taxon]] = relationship(back_populates="genomes")
+    strain: Mapped[Optional[str]]
     ncbi_assembly_id: Mapped[Optional[str]]
 
     chromosomes: Mapped[List["Chromosome"]] = relationship(back_populates="genome")
@@ -369,17 +463,29 @@ class UniversalComponent(Base, BiGGBase):
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
+    default_component_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("component.id")
+    )
+    default_component: Mapped[Optional["Component"]] = relationship(
+        foreign_keys=[default_component_id],
+        post_update=True,
+    )
+    allow_flexible_variants: Mapped[bool] = mapped_column(default=False)
+
     name: Mapped[Optional[str]]
     components: Mapped[List["Component"]] = relationship(
-        back_populates="universal_component"
+        back_populates="universal_component",
+        foreign_keys="Component.universal_component_id",
     )
     reference_mapping: Mapped["UniversalComponentReferenceMapping"] = relationship(
         back_populates="universal_component"
     )
 
-    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey("model.id"))
-    model: Mapped[Optional["Model"]] = relationship(
-        back_populates="model_namespace_universal_components"
+    collection_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("model_collection.id")
+    )
+    collection: Mapped[Optional["ModelCollection"]] = relationship(
+        back_populates="collection_namespace_universal_components"
     )
 
     universal_compartmentalized_components: Mapped[
@@ -406,17 +512,21 @@ class Component(Base, BiGGBase):
         ForeignKey(UniversalComponent.id)
     )
     universal_component: Mapped[UniversalComponent] = relationship(
-        back_populates="components"
+        back_populates="components",
+        foreign_keys=[universal_component_id],
     )
 
     name: Mapped[Optional[str]]
     # type = Column(String(20))
     formula: Mapped[Optional[str]]
     charge: Mapped[int]
+    variant: Mapped[int] = mapped_column(default=0)
 
-    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey("model.id"))
-    model: Mapped[Optional["Model"]] = relationship(
-        back_populates="model_namespace_components"
+    collection_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("model_collection.id")
+    )
+    collection: Mapped[Optional["ModelCollection"]] = relationship(
+        back_populates="collection_namespace_components"
     )
 
     compartmentalized_components: Mapped[List["CompartmentalizedComponent"]] = (
@@ -438,7 +548,7 @@ class Component(Base, BiGGBase):
     @staticmethod
     def charge_to_string(coefficient):
         if coefficient is None:
-            return 0
+            return str(0)
         if isinstance(coefficient, str):
             return coefficient
         if isinstance(coefficient, int):
@@ -448,6 +558,7 @@ class Component(Base, BiGGBase):
                 return str(int(coefficient))
             else:
                 return str(coefficient)
+        raise ValueError()
 
     def __repr__(self):
         return f"Component ({self.id}): {self.name}"
@@ -474,6 +585,7 @@ class ComponentReferenceMapping(Base):
     )
 
     reference_n: Mapped[Optional[int]]
+    reference_formula_delta: Mapped[Optional[str]]
 
     universal_component_reference_mapping: Mapped[
         Optional["UniversalComponentReferenceMapping"]
@@ -530,6 +642,8 @@ class Annotation(Base, BiGGBase):
     type = mapped_column(custom_enums["annotation_type"])
     default_data_source_id: Mapped[int] = mapped_column(ForeignKey(DataSource.id))
     default_data_source: Mapped[DataSource] = relationship(back_populates="annotations")
+
+    is_obsolete: Mapped[bool] = mapped_column(default=False)
 
     properties: Mapped[List["AnnotationProperty"]] = relationship(
         back_populates="annotation"
@@ -596,7 +710,6 @@ class AnnotationProperty(Base):
     #         self.value_str = str(val)
     #         self.value_int = None
     #         self.value_float = None
-    #
 
 
 class AnnotationLink(Base):
@@ -689,9 +802,7 @@ class Synonym(Base):
     synonym: Mapped[str]
     type = mapped_column(custom_enums["synonym_type"])
 
-    data_source_id: Mapped[int] = mapped_column(
-        ForeignKey("data_source.id", ondelete="CASCADE")
-    )
+    data_source_id: Mapped[int] = mapped_column(ForeignKey("data_source.id"))
     data_source: Mapped[DataSource] = relationship(back_populates="synonyms")
 
     __table_args__ = (UniqueConstraint("ome_id", "synonym", "type", "data_source_id"),)
@@ -714,6 +825,9 @@ class Publication(Base):
     publication_models: Mapped[List["PublicationModel"]] = relationship(
         back_populates="publication"
     )
+    collections: Mapped[List[ModelCollection]] = relationship(
+        back_populates="publication"
+    )
 
     __table_args__ = (UniqueConstraint("reference_type", "reference_id"),)
 
@@ -721,13 +835,11 @@ class Publication(Base):
 class PublicationModel(Base):
     __tablename__ = "publication_model"
 
-    model_id: Mapped[int] = mapped_column(
-        ForeignKey("model.id", ondelete="CASCADE"), primary_key=True
-    )
+    model_id: Mapped[int] = mapped_column(ForeignKey("model.id"), primary_key=True)
     model: Mapped["Model"] = relationship(back_populates="publication_models")
 
     publication_id: Mapped[int] = mapped_column(
-        ForeignKey("publication.id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("publication.id"), primary_key=True
     )
     publication: Mapped["Publication"] = relationship(
         back_populates="publication_models"
@@ -742,7 +854,7 @@ class OldIDSynonym(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     type = mapped_column(custom_enums["old_id_synonym_type"])
     synonym_id: Mapped[int] = mapped_column(
-        ForeignKey("synonym.id", ondelete="CASCADE"),
+        ForeignKey("synonym.id"),
     )
     ome_id: Mapped[int]
 
@@ -809,29 +921,20 @@ class Model(Base, BiGGBase):
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
 
-    genome_id: Mapped[int] = mapped_column(
-        ForeignKey("genome.id", onupdate="CASCADE", ondelete="CASCADE")
-    )
+    collection_id: Mapped[int] = mapped_column(ForeignKey(ModelCollection.id))
+    collection: Mapped[ModelCollection] = relationship(back_populates="models")
+
+    base_filename: Mapped[Optional[str]]
+
+    genome_id: Mapped[int] = mapped_column(ForeignKey("genome.id"))
     genome: Mapped[Genome] = relationship(back_populates="models")
 
     organism: Mapped[Optional[str]]
-    published_filename: Mapped[Optional[str]]
-    date_modified: Mapped[datetime.datetime] = mapped_column(
-        # DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    taxon_id: Mapped[Optional[int]] = mapped_column(ForeignKey("taxon.id"))
+    taxon: Mapped[Optional[Taxon]] = relationship(back_populates="models")
 
-    model_namespace_components: Mapped[List[Component]] = relationship(
-        back_populates="model"
-    )
-    model_namespace_universal_components: Mapped[List[UniversalComponent]] = (
-        relationship(back_populates="model")
-    )
-    model_namespace_universal_reactions: Mapped[List["UniversalReaction"]] = (
-        relationship(back_populates="model")
-    )
-    model_namespace_reactions: Mapped[List["Reaction"]] = relationship(
-        back_populates="model"
-    )
+    published_filename: Mapped[Optional[str]]
+    date_modified: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True))
 
     model_genes: Mapped[List["ModelGene"]] = relationship(back_populates="model")
     model_reactions: Mapped[List["ModelReaction"]] = relationship(
@@ -848,7 +951,7 @@ class Model(Base, BiGGBase):
     escher_maps: Mapped[List["EscherMap"]] = relationship(back_populates="model")
     memote_results: Mapped[List["MemoteResult"]] = relationship(back_populates="model")
 
-    __table_args__ = (UniqueConstraint("bigg_id"),)
+    __table_args__ = (UniqueConstraint("bigg_id"), UniqueConstraint("base_filename"))
 
     def __repr__(self):
         return "<cobradb Model(id={self.id}, bigg_id={self.bigg_id})>".format(self=self)
@@ -859,12 +962,12 @@ class ModelGene(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     model_id: Mapped[int] = mapped_column(
-        ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model.id"),
     )
     model: Mapped["Model"] = relationship(back_populates="model_genes")
 
     gene_id: Mapped[int] = mapped_column(
-        ForeignKey("gene.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("gene.id"),
     )
     gene: Mapped["Gene"] = relationship(back_populates="model_genes")
 
@@ -883,14 +986,16 @@ class ModelReaction(Base, BiGGBase):
     __tablename__ = "model_reaction"
     id: Mapped[int] = mapped_column(primary_key=True)
     bigg_id: Mapped[str]
+    id_in_original_model: Mapped[str]
 
     reaction_id: Mapped[int] = mapped_column(
-        ForeignKey("reaction.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("reaction.id"),
     )
     reaction: Mapped["Reaction"] = relationship(back_populates="model_reactions")
+    reversed: Mapped[bool] = mapped_column(default=False)
 
     model_id: Mapped[int] = mapped_column(
-        ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model.id"),
     )
     model: Mapped["Model"] = relationship(back_populates="model_reactions")
 
@@ -902,7 +1007,7 @@ class ModelReaction(Base, BiGGBase):
 
     gene_reaction_rule: Mapped[str]
     original_gene_reaction_rule: Mapped[Optional[str]]
-    subsystem: Mapped[str]
+    subsystem: Mapped[Optional[str]]
 
     reaction_matrix: Mapped[List["GeneReactionMatrix"]] = relationship(
         back_populates="model_reaction"
@@ -912,17 +1017,22 @@ class ModelReaction(Base, BiGGBase):
         back_populates="model_reaction"
     )
 
+    escher_mappings: Mapped[List["ModelReactionEscherMapping"]] = relationship(
+        back_populates="model_reaction"
+    )
+
     __table_args__ = (
         UniqueConstraint("reaction_id", "model_id", "copy_number"),
-        UniqueConstraint("bigg_id"),
+        UniqueConstraint("model_id", "bigg_id"),
+        UniqueConstraint("model_id", "id_in_original_model"),
     )
 
     @staticmethod
     def create_id(model_id, universal_reaction_id, copy_number):
         if copy_number == 1:
-            return f"{model_id}|{universal_reaction_id}"
+            return f"{universal_reaction_id}"
         else:
-            return f"{model_id}|{universal_reaction_id}:{copy_number}"
+            return f"{universal_reaction_id}:{copy_number}"
 
     def __repr__(self):
         return "<cobradb ModelReaction(id={self.id}, reaction_id={self.reaction_id}, model_id={self.model_id}, copy_number={self.copy_number})>".format(
@@ -944,12 +1054,12 @@ class GeneReactionMatrix(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     model_gene_id: Mapped[int] = mapped_column(
-        ForeignKey("model_gene.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model_gene.id"),
     )
     model_gene: Mapped[ModelGene] = relationship(back_populates="reaction_matrix")
 
     model_reaction_id: Mapped[int] = mapped_column(
-        ForeignKey("model_reaction.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model_reaction.id"),
     )
     model_reaction: Mapped[ModelReaction] = relationship(
         back_populates="reaction_matrix"
@@ -969,14 +1079,14 @@ class UniversalCompartmentalizedComponent(Base, BiGGBase):
     bigg_id: Mapped[str]
 
     universal_component_id: Mapped[int] = mapped_column(
-        ForeignKey(UniversalComponent.id, onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey(UniversalComponent.id),
     )
     universal_component: Mapped[UniversalComponent] = relationship(
         back_populates="universal_compartmentalized_components"
     )
 
     compartment_id: Mapped[int] = mapped_column(
-        ForeignKey("compartment.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("compartment.id"),
     )
     compartment: Mapped["Compartment"] = relationship(
         back_populates="universal_compartmentalized_components"
@@ -999,14 +1109,14 @@ class CompartmentalizedComponent(Base, BiGGBase):
     bigg_id: Mapped[str]
 
     component_id: Mapped[int] = mapped_column(
-        ForeignKey("component.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("component.id"),
     )
     component: Mapped[Component] = relationship(
         back_populates="compartmentalized_components"
     )
 
     compartment_id: Mapped[int] = mapped_column(
-        ForeignKey("compartment.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("compartment.id"),
     )
     compartment: Mapped["Compartment"] = relationship(
         back_populates="compartmentalized_components"
@@ -1033,13 +1143,17 @@ class CompartmentalizedComponent(Base, BiGGBase):
     )
 
 
-class ModelCompartmentalizedComponent(Base):
+class ModelCompartmentalizedComponent(
+    Base
+):  # Not BiGGBase, since BiGG IDs are not unique across models
     __tablename__ = "model_compartmentalized_component"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    bigg_id: Mapped[str]
+    id_in_original_model: Mapped[str]
 
     model_id: Mapped[int] = mapped_column(
-        ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model.id"),
     )
     model: Mapped["Model"] = relationship(
         back_populates="model_compartmentalized_components"
@@ -1118,7 +1232,7 @@ class ModelCount(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
     model_id: Mapped[int] = mapped_column(
-        ForeignKey("model.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("model.id"),
     )
     model: Mapped["Model"] = relationship(back_populates="model_count")
 
@@ -1131,7 +1245,7 @@ class Gene(GenomeRegion):
     __tablename__ = "gene"
 
     id: Mapped[int] = mapped_column(
-        ForeignKey("genome_region.id", onupdate="CASCADE", ondelete="CASCADE"),
+        ForeignKey("genome_region.id"),
         primary_key=True,
     )
     name: Mapped[Optional[str]]
@@ -1241,10 +1355,13 @@ class ReferenceReaction(Base, BiGGBase):
                 else:
                     rc_id = rc.bigg_id
                 coefficient = str(p["coefficient"]).lower()
-            else:
+            elif isinstance(p, ReferenceReactionParticipant):
                 rc_id = p.compound.bigg_id
                 coefficient = p.coefficient
-            if "n" in coefficient:
+            else:
+                rc_id = p.reference_compound.bigg_id
+                coefficient = p.universal_reaction_participant_info.coefficient
+            if isinstance(coefficient, str) and "n" in coefficient:
                 coefficient = math.inf
             else:
                 try:
@@ -1320,9 +1437,13 @@ class UniversalReaction(Base, BiGGBase):
     hash: Mapped[str]
     name: Mapped[Optional[str]]
 
-    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey(Model.id))
-    model: Mapped[Optional["Model"]] = relationship(
-        back_populates="model_namespace_universal_reactions"
+    is_exchange: Mapped[bool] = mapped_column(default=False)
+    is_transport: Mapped[bool] = mapped_column(default=False)
+    is_pseudo: Mapped[bool] = mapped_column(default=False)
+
+    collection_id: Mapped[Optional[int]] = mapped_column(ForeignKey(ModelCollection.id))
+    collection: Mapped[Optional["ModelCollection"]] = relationship(
+        back_populates="collection_namespace_universal_reactions"
     )
 
     reference_id: Mapped[Optional[int]] = mapped_column(
@@ -1349,16 +1470,18 @@ class UniversalReaction(Base, BiGGBase):
                 _model, bare_id = bare_id.split("__", maxsplit=1)
             else:
                 bare_id = str(self.id)
-        if bare_id.startswith("EX_"):
+
+        if reference is not None:
+            if reference.bigg_id == "BiGGr:BIOMASS":
+                return "SBO:0000629"
+        if self.is_exchange:
             return "SBO:0000627"
+        if self.is_transport:
+            return "SBO:0000655"
         if bare_id.startswith("SK_"):
             return "SBO:0000632"
         if bare_id.startswith("DM_"):
             return "SBO:0000628"
-        if reference is not None:
-            if reference.bigg_id == "BiGGr:BIOMASS":
-                return "SBO:0000629"
-
         return "SBO:0000176"
 
     def __repr__(self):
@@ -1368,23 +1491,35 @@ class UniversalReaction(Base, BiGGBase):
     def generate_hash(components):
         comp_dict = {}
         for c in components:
-            cc = c.get("universal_compartmentalized_component")
-            if cc is None:
-                cc_id = c["universal_compartmentalized_component_bigg_id"]
+            if isinstance(c, dict):
+                cc = c.get("universal_compartmentalized_component")
+                if cc is None:
+                    cc_id = c["universal_compartmentalized_component_bigg_id"]
+                else:
+                    cc_id = cc.bigg_id
+                coeff = c["coefficient"]
             else:
-                cc_id = cc.bigg_id
-            comp_dict[cc_id] = comp_dict.get(cc_id, 0) + c["coefficient"]
+                cc_id = c.universal_compartmentalized_component.bigg_id
+                coeff = c.coefficient
+            prev_coeffs = comp_dict.get(cc_id, (0, 0))
+            if coeff > 0:
+                comp_dict[cc_id] = (prev_coeffs[0], prev_coeffs[1] + coeff)
+            else:
+                comp_dict[cc_id] = (prev_coeffs[0] - coeff, prev_coeffs[1])
+
             # if comp_dict[cc_id] == 0:
             #     del comp_dict[cc_id]
-        sorting_1 = sorted(comp_dict.items(), key=lambda x: (x[0], abs(x[1])))
+        sorting_1 = sorted(
+            comp_dict.items(), key=lambda x: (x[0], abs(x[1][1] - x[1][0]))
+        )
         first_item = next(iter(sorting_1))
-        if first_item[1] > 0:
-            comp_dict = {k: -1 * v for k, v in comp_dict.items()}
+        if first_item[1][1] > first_item[1][0]:
+            comp_dict = {k: (v[1], v[0]) for k, v in comp_dict.items()}
         hash_str = "/".join(
-            f"{Reaction.coefficient_to_string(coeff)}${cc_id}"
+            f"-{Reaction.coefficient_to_string(coeff[0])}+{Reaction.coefficient_to_string(coeff[1])}${cc_id}"
             for cc_id, coeff in sorted(
                 comp_dict.items(),
-                key=itemgetter(0, 1),
+                key=lambda x: (x[0], x[1][0], x[1][1]),
             )
         )
         if len(hash_str) > HASH_STR_MAX_LEN:
@@ -1401,9 +1536,9 @@ class Reaction(Base, BiGGBase):
 
     hash: Mapped[str]
 
-    model_id: Mapped[Optional[int]] = mapped_column(ForeignKey(Model.id))
-    model: Mapped[Optional["Model"]] = relationship(
-        back_populates="model_namespace_reactions"
+    collection_id: Mapped[Optional[int]] = mapped_column(ForeignKey(ModelCollection.id))
+    collection: Mapped[Optional["ModelCollection"]] = relationship(
+        back_populates="collection_namespace_reactions"
     )
 
     copy_number: Mapped[int]
@@ -1422,7 +1557,10 @@ class Reaction(Base, BiGGBase):
         back_populates="reaction"
     )
 
-    __table_args__ = (UniqueConstraint("hash", "model_id"), UniqueConstraint("bigg_id"))
+    __table_args__ = (
+        UniqueConstraint("hash", "collection_id"),
+        UniqueConstraint("bigg_id"),
+    )
 
     def __repr__(self):
         return "<cobradb Reaction(id=%s)>" % (self.id,)
@@ -1454,12 +1592,17 @@ class Reaction(Base, BiGGBase):
     def generate_hash(components):
         comp_dict = {}
         for c in components:
-            cc = c.get("compartmentalized_component")
-            if cc is None:
-                cc_id = c["compartmentalized_component_bigg_id"]
+            if isinstance(c, dict):
+                cc = c.get("compartmentalized_component")
+                if cc is None:
+                    cc_id = c["compartmentalized_component_bigg_id"]
+                else:
+                    cc_id = cc.bigg_id
+                coeff = c["coefficient"]
             else:
-                cc_id = cc.bigg_id
-            comp_dict[cc_id] = comp_dict.get(cc_id, 0) + c["coefficient"]
+                cc_id = c.compartmentalized_component.bigg_id
+                coeff = c.coefficient
+            comp_dict[cc_id] = comp_dict.get(cc_id, 0) + coeff
             # if comp_dict[cc_id] == 0:
             #     del comp_dict[cc_id]
         sorting_1 = sorted(comp_dict.items(), key=lambda x: (x[0], abs(x[1])))
@@ -1486,24 +1629,22 @@ class UniversalReactionMatrix(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    universal_reaction_id: Mapped[int] = mapped_column(ForeignKey(UniversalReaction.id))
-    universal_reaction: Mapped[UniversalReaction] = relationship(
+    universal_reaction_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey(UniversalReaction.id), default=None
+    )
+    universal_reaction: Mapped[Optional[UniversalReaction]] = relationship(
         back_populates="matrix"
     )
 
     reference_reaction_participant_id: Mapped[Optional[int]] = mapped_column(
-        ForeignKey(ReferenceReactionParticipant.id)
+        ForeignKey(ReferenceReactionParticipant.id), default=None
     )
     reference_reaction_participant: Mapped[Optional[ReferenceReactionParticipant]] = (
         relationship(back_populates="universal_reaction_matrix")
     )
 
     universal_compartmentalized_component_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            UniversalCompartmentalizedComponent.id,
-            onupdate="CASCADE",
-            ondelete="CASCADE",
-        ),
+        ForeignKey(UniversalCompartmentalizedComponent.id),
     )
     universal_compartmentalized_component: Mapped[
         UniversalCompartmentalizedComponent
@@ -1515,9 +1656,9 @@ class UniversalReactionMatrix(Base):
         back_populates="universal_reaction_matrix"
     )
     __table_args__ = (
-        UniqueConstraint(
-            "universal_reaction_id", "universal_compartmentalized_component_id"
-        ),
+        # UniqueConstraint(
+        #     "universal_reaction_id", "universal_compartmentalized_component_id"
+        # ),
     )
 
 
@@ -1537,9 +1678,7 @@ class ReactionMatrix(Base):
     )
 
     compartmentalized_component_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            CompartmentalizedComponent.id, onupdate="CASCADE", ondelete="CASCADE"
-        ),
+        ForeignKey(CompartmentalizedComponent.id),
     )
     compartmentalized_component: Mapped[CompartmentalizedComponent] = relationship(
         back_populates="matrix"
@@ -1612,3 +1751,37 @@ class MemoteResult(Base):
     result = mapped_column(custom_enums["test_result"], nullable=True)
 
     data_count: Mapped[Optional[int]]
+
+
+class EscherModule(Base, BiGGBase):
+    __tablename__ = "escher_module"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bigg_id: Mapped[str]
+
+    name: Mapped[str]
+    description: Mapped[str]
+
+    model_reaction_mappings: Mapped[List["ModelReactionEscherMapping"]] = relationship(
+        back_populates="escher_module"
+    )
+
+    __table_args__ = (UniqueConstraint("bigg_id"),)
+
+
+class ModelReactionEscherMapping(Base):
+    __tablename__ = "model_reaction_escher_mapping"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    model_reaction_id: Mapped[int] = mapped_column(ForeignKey(ModelReaction.id))
+    model_reaction: Mapped[ModelReaction] = relationship(
+        back_populates="escher_mappings"
+    )
+
+    escher_module_id: Mapped[int] = mapped_column(ForeignKey(EscherModule.id))
+    escher_module: Mapped[EscherModule] = relationship(
+        back_populates="model_reaction_mappings"
+    )
+
+    __table_args__ = (UniqueConstraint("model_reaction_id", "escher_module_id"),)

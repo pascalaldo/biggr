@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, Iterable, Type, Union
+from typing import Any, Dict, Iterable, Optional, Type, Union
 import requests
 import json
 from biggr import models

@@ -1,4 +1,4 @@
-"""Module to implement ORM to the ome database"""
+"""Module to mimic the cobradb models"""
 
 import datetime
 import math
@@ -25,6 +25,7 @@ T = TypeVar("T", bound=Any)
 
 
 class Mapped(Generic[T]):
+    """Makes it easier to reuse cobradb/sqlalchemy code."""
     pass
 
 
@@ -133,7 +134,7 @@ class DeclarativeMeta(type):
                 attr_val = attrs.get(k)
                 if attr_val is None:
                     attrs[k] = dummy_col_f(obj_type=base_type)
-        print(attrs["__attr_base_classes__"])
+        # print(attrs["__attr_base_classes__"])
 
         return super().__new__(cls, name, bases, attrs)
 

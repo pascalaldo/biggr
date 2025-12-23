@@ -7,10 +7,22 @@ API_URL = "https://biggr.org/api/v3/"
 OBJECTS_API_URL = f"{API_URL}objects/"
 IDENTIFIERS_API_URL = f"{API_URL}identifiers/"
 
+#: Dictionary mapping available cobradb-style model names to their classes.
 MODEL_NAMES = {x.__name__: x for x in models.Base.__subclasses__()}
 
 
 def _request(api_url: str, data: Dict[str, Any]) -> Optional[Any]:
+    """Helper to make an API request.
+
+    Parameters
+    ----------
+    api_url: str
+        URL of the BiGGr API to connect to.
+    data: dict
+        Request data.
+
+    :noindex:
+    """
     r = requests.post(api_url, json=data)
     if r.status_code != 200:
         print(f"Status code: {r.status_code}")
@@ -44,11 +56,15 @@ def get_raw(
     return _request(OBJECTS_API_URL, data)
 
 
-def convert_result_to_models(o):
+def _convert_result_to_models(o):
+    """Helper to convert API response to cobradb-style models.
+    
+    :noindex:
+    """
     if isinstance(o, str):
         return o
     if isinstance(o, list):
-        return [convert_result_to_models(x) for x in o]
+        return [_convert_result_to_models(x) for x in o]
     if isinstance(o, dict):
         cls_type = dict
         if "_type" in o:
@@ -57,7 +73,7 @@ def convert_result_to_models(o):
             cls_type = MODEL_NAMES.get(o["_type"])
             if cls_type is None:
                 raise ValueError()
-        entries = {k: convert_result_to_models(v) for k, v in o.items() if k != "_type"}
+        entries = {k: _convert_result_to_models(v) for k, v in o.items() if k != "_type"}
         if cls_type is dict:
             return entries
         return cls_type.from_dict(entries)
@@ -88,9 +104,9 @@ def get(obj_type: Union[str, Type[models.Base]], obj_id: Union[str, int]):
     if result is None:
         return None
     if "object" in result:
-        return convert_result_to_models(result["object"])
+        return _convert_result_to_models(result["object"])
     else:
-        return convert_result_to_models(result["objects"])
+        return _convert_result_to_models(result["objects"])
 
 
 def get_metabolites_by_identifiers(
@@ -107,4 +123,4 @@ def get_metabolites_by_identifiers(
         "model_bigg_id": model_bigg_id,
     }
     result = _request(IDENTIFIERS_API_URL, query)
-    return convert_result_to_models(result)
+    return _convert_result_to_models(result)

@@ -28,7 +28,7 @@ sys.path.insert(0, SRC_PATH)
 extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.intersphinx",
-    "sphinx.ext.mathjax",
+    # "sphinx.ext.mathjax",
     "sphinx.ext.napoleon",
     "sphinx.ext.autosummary",
     "autoapi.extension",
@@ -38,6 +38,12 @@ extensions = [
 # Document Python Code
 autoapi_dirs = [join(SRC_PATH, "biggr")]
 autoapi_add_toctree_entry = False
+autoapi_options = [
+    "members",
+    "undoc-members",
+    "show-inheritance",
+    "show-module-summary",
+]
 
 # Enable typehints
 autodoc_typehints = "signature"
@@ -57,6 +63,7 @@ copyright = "2025-2026, Pascal A. Pieters"
 # built documents.
 # This import has to be here.
 from biggr import __version__ as release  # noqa: E402
+
 doc_name = f"{project} Documentation"
 authors = "Pascal A. Pieters"
 description = """Easy access to the BiGGr API."""
@@ -73,8 +80,7 @@ pygments_style = "sphinx"
 # -- Options for HTML output --------------------------------------------------
 
 mathjax_path = (
-    "https://cdn.mathjax.org/mathjax/latest/"
-    "MathJax.js?config=TeX-AMS-MML_HTMLorMML"
+    "https://cdn.mathjax.org/mathjax/latest/" "MathJax.js?config=TeX-AMS-MML_HTMLorMML"
 )
 
 # -- Options for LaTeX output --------------------------------------------------
@@ -104,9 +110,7 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [
-    ("index", project, doc_name, [authors], 1)
-]
+man_pages = [("index", project, doc_name, [authors], 1)]
 
 # -- Options for Texinfo output ------------------------------------------------
 

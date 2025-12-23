@@ -1,7 +1,7 @@
-Sphinx>=8.2
+Sphinx
 sphinxcontrib-napoleon
-sphinx-autoapi>=3.6
-nbsphinx>=0.2.4
-sphinx-book-theme~=1.1
+sphinx-autoapi
+nbsphinx
+sphinx-book-theme
 ipykernel
 pandoc

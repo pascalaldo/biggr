@@ -5,7 +5,7 @@ Documentation for biggr
     :numbered: 3
     :maxdepth: 2
 
-    model_information
+    basic_usage
     API </autoapi/biggr/index.rst>
 
 

@@ -3,6 +3,7 @@
 from os.path import abspath, dirname, isfile
 from sys import path
 from setuptools import setup, find_packages
+from biggr import __version__
 
 # To temporarily modify sys.path
 SETUP_DIR = abspath(dirname(__file__))
@@ -15,7 +16,7 @@ if isfile(requirement_path):
 
 setup(
     name="biggr",
-    version="0.1.0",
+    version=__version__,
     description="""Easy access to the BiGGr API.""",
     url="https://github.com/pascalaldo/biggr",
     author="Pascal A. Pieters",
